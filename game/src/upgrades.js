@@ -1,148 +1,133 @@
-// Level-up upgrades: eleven choices, each with tiers. A card shows the name, a
-// short description, its effect, and tier pips (filled = owned, empty = remaining).
-// Applying one mutates the player's stats; the world asks for three distinct
-// choices the player does not already have maxed.
+// NOVA SWARM — the level-up system. Kills drop XP shards; enough XP earns
+// a level, and each level offers a choice of three upgrade cards. Every
+// upgrade can stack a few times, so a run builds a different ship each time.
 
-import { PLAYER } from './config.js';
+import { TUNE } from './config.js';
 
+// XP needed to gain `level` (1-based): 60, then 70, 80, 90, ...
+export function xpNeedFor(level) {
+  return TUNE.xpNeed(level);
+}
+
+// One row per upgrade: what it is called, what it promises, how far it
+// stacks, and what it does to the ship when taken.
 export const UPGRADES = [
   {
     id: 'damage',
-    name: 'Overcharge Rounds',
-    icon: 'DMG',
+    name: 'Heavy Rounds',
     desc: '+25% bullet damage',
-    maxTier: 5,
-    apply(player) { player.damage *= 1.25; },
+    max: 5,
+    apply(ship) {
+      ship.damageMul *= 1.25;
+    },
   },
   {
-    id: 'fireRate',
+    id: 'firerate',
     name: 'Rapid Cycler',
-    icon: 'RPM',
-    desc: '+18% fire rate',
-    maxTier: 5,
-    apply(player) { player.fireInterval *= 0.85; },
+    desc: 'Fire 12% faster',
+    max: 5,
+    apply(ship) {
+      ship.fireInterval *= 0.88;
+    },
   },
   {
     id: 'multishot',
     name: 'Split Cannon',
-    icon: 'x2',
-    desc: '+1 bullet per shot',
-    maxTier: 3,
-    apply(player) { player.multishot += 1; },
+    desc: '+1 projectile per shot',
+    max: 3,
+    apply(ship) {
+      ship.shots += 1;
+    },
   },
   {
-    id: 'pierce',
+    id: 'piercing',
     name: 'Lance Rounds',
-    icon: 'PIERCE',
-    desc: 'Bullets pierce +1 enemy',
-    maxTier: 3,
-    apply(player) { player.pierce += 1; },
+    desc: 'Bullets pierce +1 foe',
+    max: 3,
+    apply(ship) {
+      ship.pierce += 1;
+    },
   },
   {
-    id: 'bulletSpeed',
-    name: 'Railgun Coils',
-    icon: 'VEL',
-    desc: '+20% bullet speed',
-    maxTier: 3,
-    apply(player) { player.bulletSpeed *= 1.2; },
-  },
-  {
-    id: 'moveSpeed',
-    name: 'Ion Thrusters',
-    icon: 'SPD',
-    desc: '+12% move speed',
-    maxTier: 4,
-    apply(player) { player.speed *= 1.12; },
-  },
-  {
-    id: 'maxHp',
-    name: 'Hull Plating',
-    icon: 'HP',
-    desc: '+25 max HP and heal 25',
-    maxTier: 5,
-    apply(player) {
-      player.maxHp += 25;
-      player.hp = Math.min(player.maxHp, player.hp + 25);
+    id: 'crit',
+    name: 'Deadeye Core',
+    desc: '+10% critical chance (crits hit double)',
+    max: 5,
+    apply(ship) {
+      ship.crit += 0.1;
     },
   },
   {
     id: 'magnet',
-    name: 'Tractor Web',
-    icon: 'MAG',
-    desc: '+40% shard magnet radius',
-    maxTier: 4,
-    apply(player) { player.magnetRadius *= 1.4; },
+    name: 'Tractor Field',
+    desc: '+60% shard magnet radius',
+    max: 4,
+    apply(ship) {
+      ship.magnet *= 1.6;
+    },
   },
   {
     id: 'dash',
-    name: 'Blink Drive',
-    icon: 'DASH',
+    name: 'Overdrive Dash',
     desc: 'Dash recharges 25% faster',
-    maxTier: 3,
-    apply(player) { player.dashCooldown *= 0.75; },
+    max: 3,
+    apply(ship) {
+      ship.dashCooldown *= 0.75;
+    },
   },
   {
-    id: 'crit',
-    name: 'Weak-Point Optics',
-    icon: 'CRIT',
-    desc: '+8% critical chance (2x dmg)',
-    maxTier: 4,
-    apply(player) { player.critChance += 0.08; },
+    id: 'hull',
+    name: 'Ablative Hull',
+    desc: '+25 max hull, restore 25 hull now',
+    max: 4,
+    apply(ship) {
+      ship.maxHp += 25;
+      ship.hp = Math.min(ship.maxHp, ship.hp + 25);
+    },
   },
   {
     id: 'nova',
     name: 'Nova Pulse',
-    icon: 'NOVA',
-    desc: 'Radial burst every 8s (upgrades: faster, stronger)',
-    maxTier: 3,
-    apply(player) {
-      player.novaLevel += 1;
-      player.novaInterval = Math.max(4, PLAYER.novaInterval - (player.novaLevel - 1) * 2);
-      player.novaDamage = PLAYER.novaDamage + (player.novaLevel - 1) * 15;
-      player.novaTimer = Math.min(player.novaTimer, 1.5);
+    desc: 'A shockwave blasts nearby foes every few seconds',
+    max: 3,
+    apply(ship) {
+      ship.nova += 1;
     },
   },
 ];
 
-/** Find an upgrade definition by id. */
 export function upgradeById(id) {
-  return UPGRADES.find((upgrade) => upgrade.id === id) || null;
+  return UPGRADES.find((u) => u.id === id) ?? null;
 }
 
-/** Current tier of an upgrade on this player (0 = not owned). */
-export function upgradeTier(player, id) {
-  return player.upgrades[id] || 0;
+// How many stacks of `id` the ship already carries (0 when none).
+export function stacksOf(ship, id) {
+  return ship.taken[id] ?? 0;
 }
 
-/**
- * Roll three distinct upgrade choices the player can still improve, using the
- * world's seeded RNG. When everything is maxed, offer the repeatable ones.
- */
-export function rollChoices(player, random) {
-  const available = UPGRADES.filter((upgrade) => upgradeTier(player, upgrade.id) < upgrade.maxTier);
-  const pool = available.length >= 3 ? available : UPGRADES.slice();
-  const picks = [];
-  const bag = pool.slice();
-  while (picks.length < 3 && bag.length > 0) {
-    const index = Math.floor(random() * bag.length);
-    picks.push(bag.splice(index, 1)[0]);
+// Roll three distinct cards. Upgrades already at their cap are left out
+// when anything else is still available; with nothing left, any three do.
+export function rollOffers(rng, ship) {
+  const open = UPGRADES.filter((u) => stacksOf(ship, u.id) < u.max);
+  const pool = open.length >= 3 ? open : UPGRADES;
+  const picked = [];
+  const copy = pool.slice();
+  while (picked.length < 3 && copy.length > 0) {
+    const i = Math.floor(rng.next() * copy.length);
+    picked.push(copy.splice(i, 1)[0]);
   }
-  return picks.map((upgrade) => ({
-    id: upgrade.id,
-    name: upgrade.name,
-    icon: upgrade.icon,
-    desc: upgrade.desc,
-    tier: upgradeTier(player, upgrade.id),
-    maxTier: upgrade.maxTier,
-  }));
+  while (picked.length < 3) picked.push(rng.pick(UPGRADES));
+  return picked;
 }
 
-/** Apply a chosen upgrade card to the player and record its tier. */
-export function applyUpgrade(player, id) {
-  const upgrade = upgradeById(id);
-  if (!upgrade) return false;
-  if (upgradeTier(player, id) >= upgrade.maxTier) return false;
-  upgrade.apply(player);
-  player.upgrades[id] = upgradeTier(player, id) + 1;
-  return true;
+// Take the card at `slot` of the current offer: apply it, count it, and
+// hand back the upgrade so the caller can announce it.
+export function takeOffer(state, slot) {
+  const offer = state.offer;
+  if (!offer || slot < 0 || slot >= offer.length) return null;
+  const def = offer[slot];
+  def.apply(state.player);
+  state.player.taken[def.id] = stacksOf(state.player, def.id) + 1;
+  state.upgrades += 1;
+  return def;
 }

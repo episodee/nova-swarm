@@ -1,164 +1,151 @@
-// Synthesised WebAudio sound effects and a quiet bass-pulse music loop.
-// No audio files, no network: every sound is an oscillator or filtered noise built
-// here. The context is created lazily on the first user gesture (browsers block
-// audio before one), and every call is guarded so a headless run never throws.
+// NOVA SWARM — every sound is synthesized with WebAudio: no audio files,
+// no network, nothing to download. All of it is defensive: if the browser
+// blocks audio (or the page never gets a gesture), the game stays silent
+// and keeps playing. Sounds are queued as short blips and noise bursts.
 
 export function createAudio() {
-  let context = null;
+  let ctx = null;
   let master = null;
+  let noiseBuf = null;
   let muted = false;
-  let musicTimer = 0;
+  let musicTimer = null;
   let musicStep = 0;
-  let musicOn = false;
 
-  /** Bass line the loop walks, in Hz (A minor, low and quiet). */
-  const BASS_NOTES = [55, 55, 65.41, 49, 55, 55, 82.41, 73.42];
+  // The bass line: a slow, dark pulse that keeps the arena humming.
+  const BASS_LINE = [55, 0, 55, 0, 65.41, 0, 49, 0];
 
   function ensure() {
-    if (context) return true;
+    if (ctx) return ctx;
     try {
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
-      if (!AudioContext) return false;
-      context = new AudioContext();
-      master = context.createGain();
-      master.gain.value = muted ? 0 : 0.5;
-      master.connect(context.destination);
-      return true;
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      ctx = new AC();
+      master = ctx.createGain();
+      master.gain.value = muted ? 0 : 0.45;
+      master.connect(ctx.destination);
+      const len = Math.floor(ctx.sampleRate * 0.25);
+      noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const data = noiseBuf.getChannelData(0);
+      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
     } catch {
-      return false;
+      ctx = null;
     }
+    return ctx;
   }
 
-  /** Resume the context after a gesture; safe to call any time. */
+  // Call from the first user gesture (Enter / click) to unlock audio.
   function unlock() {
-    if (ensure() && context.state === 'suspended') {
-      context.resume().catch(() => {});
-    }
+    const c = ensure();
+    if (c && c.state === 'suspended') c.resume().catch(() => {});
+    return c !== null;
   }
 
-  function setMuted(value) {
-    muted = value;
-    if (master) master.gain.value = muted ? 0 : 0.5;
-    return muted;
-  }
-
-  function isMuted() {
-    return muted;
-  }
-
-  function tone(freq, duration, type, volume, slideTo) {
-    if (!ensure() || muted) return;
+  function blip(freq, dur, type, vol, slideTo) {
+    const c = ensure();
+    if (!c || muted) return;
     try {
-      const now = context.currentTime;
-      const osc = context.createOscillator();
-      const gain = context.createGain();
+      const t = c.currentTime;
+      const osc = c.createOscillator();
+      const gain = c.createGain();
       osc.type = type;
-      osc.frequency.setValueAtTime(freq, now);
-      if (slideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(1, slideTo), now + duration);
-      gain.gain.setValueAtTime(volume, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+      osc.frequency.setValueAtTime(freq, t);
+      if (slideTo !== undefined) osc.frequency.exponentialRampToValueAtTime(Math.max(1, slideTo), t + dur);
+      gain.gain.setValueAtTime(vol, t);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
       osc.connect(gain);
       gain.connect(master);
-      osc.start(now);
-      osc.stop(now + duration + 0.02);
+      osc.start(t);
+      osc.stop(t + dur + 0.02);
     } catch {
-      // Audio is decoration: never let it break the game.
+      // A failed blip is never worth breaking the game over.
     }
   }
 
-  function noise(duration, volume, filterFreq) {
-    if (!ensure() || muted) return;
+  function noise(dur, vol, cutoff) {
+    const c = ensure();
+    if (!c || muted || !noiseBuf) return;
     try {
-      const now = context.currentTime;
-      const length = Math.max(1, Math.floor(context.sampleRate * duration));
-      const buffer = context.createBuffer(1, length, context.sampleRate);
-      const data = buffer.getChannelData(0);
-      for (let i = 0; i < length; i += 1) data[i] = (Math.random() * 2 - 1) * (1 - i / length);
-      const source = context.createBufferSource();
-      source.buffer = buffer;
-      const filter = context.createBiquadFilter();
+      const t = c.currentTime;
+      const src = c.createBufferSource();
+      src.buffer = noiseBuf;
+      src.loop = true;
+      const filter = c.createBiquadFilter();
       filter.type = 'lowpass';
-      filter.frequency.value = filterFreq;
-      const gain = context.createGain();
-      gain.gain.setValueAtTime(volume, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-      source.connect(filter);
+      filter.frequency.value = cutoff;
+      const gain = c.createGain();
+      gain.gain.setValueAtTime(vol, t);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      src.connect(filter);
       filter.connect(gain);
       gain.connect(master);
-      source.start(now);
+      src.start(t);
+      src.stop(t + dur + 0.02);
     } catch {
-      // Audio is decoration: never let it break the game.
+      // See blip.
     }
   }
 
-  /** One short laser blip for the player's gun. */
-  function shoot() {
-    tone(880 + Math.random() * 120, 0.07, 'square', 0.05, 320);
-  }
-
-  /** A dull thud when a bullet or the player is hit. */
-  function hit() {
-    tone(160, 0.09, 'sawtooth', 0.12, 70);
-  }
-
-  /** Filtered-noise burst for an enemy exploding. */
-  function explosion(big) {
-    noise(big ? 0.5 : 0.28, big ? 0.35 : 0.2, big ? 900 : 1400);
-    tone(big ? 90 : 140, big ? 0.4 : 0.2, 'sine', 0.25, 40);
-  }
-
-  /** Rising ping when an XP shard is collected. */
-  function pickup(combo) {
-    const step = Math.min(combo || 0, 12);
-    tone(660 * Math.pow(1.059, step), 0.09, 'sine', 0.08, 990 * Math.pow(1.059, step));
-  }
-
-  /** Little arpeggio when the player levels up. */
-  function levelUp() {
-    [523.25, 659.25, 783.99, 1046.5].forEach((freq, i) => {
-      setTimeout(() => tone(freq, 0.16, 'triangle', 0.14), i * 70);
-    });
-  }
-
-  /** Low horn when a wave (or the boss) arrives. */
-  function waveHorn() {
-    tone(110, 0.5, 'sawtooth', 0.12, 220);
-    tone(165, 0.5, 'sawtooth', 0.07, 330);
-  }
-
-  /** Descending notes for game over. */
-  function gameOver() {
-    [392, 311, 233, 175].forEach((freq, i) => {
-      setTimeout(() => tone(freq, 0.3, 'triangle', 0.14), i * 160);
-    });
-  }
-
-  /** Whoosh for a dash. */
-  function dash() {
-    noise(0.16, 0.12, 2400);
-  }
-
-  /** Advance the bass-pulse loop; call once a frame while playing. */
-  function updateMusic(dt, playing) {
-    if (!playing || muted) {
-      musicOn = false;
-      return;
-    }
-    if (!musicOn) {
-      musicOn = true;
-      musicTimer = 0;
-      musicStep = 0;
-      unlock();
-    }
-    musicTimer -= dt;
-    if (musicTimer <= 0) {
-      musicTimer = 0.31;
-      const freq = BASS_NOTES[musicStep % BASS_NOTES.length];
+  function startMusic() {
+    if (musicTimer !== null) return;
+    ensure();
+    musicTimer = window.setInterval(() => {
+      if (muted || !ctx) return;
+      const freq = BASS_LINE[musicStep % BASS_LINE.length];
       musicStep += 1;
-      tone(freq, 0.28, 'sine', 0.1);
-      if (musicStep % 4 === 1) tone(freq * 4, 0.05, 'square', 0.015);
+      if (freq > 0) blip(freq, 0.34, 'triangle', 0.16, freq * 0.5);
+    }, 250);
+  }
+
+  function stopMusic() {
+    if (musicTimer !== null) {
+      window.clearInterval(musicTimer);
+      musicTimer = null;
     }
   }
 
-  return { unlock, setMuted, isMuted, shoot, hit, explosion, pickup, levelUp, waveHorn, gameOver, dash, updateMusic };
+  return {
+    unlock,
+    startMusic,
+    stopMusic,
+    setMuted(m) {
+      muted = m;
+      if (master && ctx) master.gain.value = m ? 0 : 0.45;
+    },
+    isMuted() {
+      return muted;
+    },
+    shoot() {
+      blip(920 + Math.random() * 120, 0.07, 'square', 0.05, 320);
+    },
+    hit() {
+      blip(300, 0.05, 'square', 0.06, 140);
+    },
+    explode() {
+      noise(0.28, 0.22, 900);
+      blip(140, 0.22, 'sawtooth', 0.1, 40);
+    },
+    pickup() {
+      blip(1180, 0.08, 'sine', 0.07, 1760);
+    },
+    levelup() {
+      blip(523, 0.1, 'sine', 0.09);
+      window.setTimeout(() => blip(659, 0.1, 'sine', 0.09), 90);
+      window.setTimeout(() => blip(784, 0.16, 'sine', 0.1), 180);
+    },
+    hurt() {
+      blip(180, 0.18, 'sawtooth', 0.14, 60);
+      noise(0.12, 0.12, 500);
+    },
+    dash() {
+      noise(0.14, 0.08, 2400);
+    },
+    boss() {
+      blip(98, 0.5, 'sawtooth', 0.12, 49);
+      noise(0.4, 0.1, 300);
+    },
+    nova() {
+      blip(660, 0.3, 'sine', 0.1, 1320);
+      noise(0.2, 0.06, 1800);
+    },
+  };
 }

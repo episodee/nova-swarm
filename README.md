@@ -4,60 +4,46 @@
 [![rank](https://make.fun/badge/best-game-01/episodee/nova-swarm/rank.svg)](https://make.fun/bounty/best-game-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=best-game-01)
 [![reward](https://make.fun/badge/best-game-01/episodee/nova-swarm/reward.svg)](https://make.fun/bounty/best-game-01?utm_source=github&utm_medium=readme&utm_campaign=best-game-01)
 
-NOVA SWARM is a neon arena survival twin-stick shooter. You are the last nova ship in a
-swarm of hostile shapes: chasers hunt you, weavers strafe and shoot, splitters
-burst into minis, dashers telegraph and lunge, and every 5th wave the
-Voidborn Prime arrives with radial bullet bursts and a health bar of its own.
-
-Kill the swarm, collect the XP shards it drops, and spend each level-up on
-one of three upgrade cards — damage, fire rate, multishot, piercing, crit,
-magnet, dash, hull, or the Nova Pulse radial burst. Combos multiply your
-score; waves escalate in count, health and speed; one life, 100 HP, and a
-dash with i-frames between you and the dark.
+NOVA SWARM is a neon arena survival twin-stick shooter that runs entirely
+offline in a desktop browser. You are the last ship standing against the
+swarm: chasers that hunt you down, weavers that slide sideways as they
+close in, splitters that break apart when they die, dashers that telegraph
+and then lunge, and every fifth wave the Voidborn Prime — a boss that
+fills the arena with rings of bullets and wears its own health bar.
+Kills drop XP shards; enough XP earns a level, and every level offers a
+choice of three upgrade cards (damage, fire rate, multishot, piercing,
+critical hits, magnet, dash, hull, and the Nova Pulse shockwave), so no
+two runs build the same ship. Kills chain into a combo multiplier, the
+waves keep getting harder, and your best score is kept in localStorage.
 
 ## Run it
 
 ```sh
 node serve.ts
-# then open http://localhost:8080
+# open http://localhost:8080
 ```
 
 ## Controls
 
-| Input | Action |
-| --- | --- |
-| WASD / arrow keys | Move |
-| Mouse | Aim |
-| Hold left click | Fire |
-| Space / Shift | Dash (brief invulnerability, cooldown) |
-| 1 / 2 / 3 or click | Pick a level-up card |
-| P / Esc | Pause |
-| M | Mute |
-| Enter / click | Start / restart |
-| R | Restart on game over |
+- WASD / Arrow keys — move
+- Mouse — aim, hold left click — fire
+- Space / Shift — dash (brief invulnerability)
+- P — pause, M — mute, R — restart after game over
+- 1 / 2 / 3 — pick an upgrade card on level-up
 
-Screenshots are real renders of the game's own code (`?shot=start|play|levelup|end&seed=7`),
-taken at 1280x480. The simulation runs on a fixed 1/60 s step with a seeded
-RNG, so a seeded run is repeatable.
+## The swarm
 
-## Files
+- **Chaser** — hunts you down, never stops.
+- **Weaver** — closes in while sliding side to side.
+- **Splitter** — breaks into two fast minis when it dies.
+- **Dasher** — telegraphs, then lunges at where you were.
+- **Voidborn Prime** — the boss of every fifth wave: slow, huge, firing
+  rings of bullets and spawning minions, with its own health bar.
 
-- `game/index.html` — canvas + status line, module script
-- `game/src/config.js` — all tuning numbers + palette
-- `game/src/random.js` — seeded RNG (mulberry32)
-- `game/src/audio.js` — synthesised WebAudio SFX + bass-pulse loop
-- `game/src/input.js` — keyboard / mouse, actions, aim
-- `game/src/entities.js` — player, bullets, enemies incl. boss, shards, particles
-- `game/src/world.js` — waves, spawning, XP / levels, combo, score, fixed-step update
-- `game/src/upgrades.js` — upgrade definitions + card choices
-- `game/src/render.js` — all drawing: background, entities, HUD, menus, overlays
-- `game/src/shots.js` — `?shot=` scenes with autopilots that really play
-- `game/src/main.js` — boot, loop, screens, `window.__nova` debug state
-- `main.ts` — hands the entry in: copies `game/` + `screenshots/` to `/output` and writes `dossier.json`
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+Kills chain into a combo multiplier (up to x8), and every level offers
+three upgrade cards: Heavy Rounds, Rapid Cycler, Split Cannon, Lance
+Rounds, Deadeye Core, Tractor Field, Overdrive Dash, Ablative Hull, and
+the Nova Pulse shockwave.
 
 ---
 
