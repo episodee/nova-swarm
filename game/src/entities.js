@@ -8,33 +8,32 @@ import { FOES, TUNE } from './config.js';
 
 // A fresh foe of `type` at (x, y). The wave it arrives in is kept so the
 // boss and the late waves can hit a little harder.
-export function createEnemy(type, x, y, wave, rng) {
+export function createEnemy(type, x, y, wave, rng, out = {}) {
   const base = FOES[type];
   const hpScale = 1 + Math.max(0, wave - 5) * 0.06;
-  return {
-    type,
-    x,
-    y,
-    vx: 0,
-    vy: 0,
-    hp: Math.round(base.hp * hpScale),
-    maxHp: Math.round(base.hp * hpScale),
-    radius: base.radius,
-    speed: base.speed,
-    damage: base.damage,
-    score: base.score,
-    color: base.color,
-    t: 0,
-    phase: rng.next() * Math.PI * 2,
-    mode: 'cruise',
-    modeT: 1.5 + rng.next() * 1.5,
-    aimX: 0,
-    aimY: 0,
-    burstT: 2.0,
-    minionT: 5.0,
-    flash: 0,
-    dead: false,
-  };
+  out.type = type;
+  out.x = x;
+  out.y = y;
+  out.vx = 0;
+  out.vy = 0;
+  out.hp = Math.round(base.hp * hpScale);
+  out.maxHp = Math.round(base.hp * hpScale);
+  out.radius = base.radius;
+  out.speed = base.speed;
+  out.damage = base.damage;
+  out.score = base.score;
+  out.color = base.color;
+  out.t = 0;
+  out.phase = rng.next() * Math.PI * 2;
+  out.mode = 'cruise';
+  out.modeT = 1.5 + rng.next() * 1.5;
+  out.aimX = 0;
+  out.aimY = 0;
+  out.burstT = 2.0;
+  out.minionT = 5.0;
+  out.flash = 0;
+  out.dead = false;
+  return out;
 }
 
 // Steer a foe's velocity toward a desired one, smoothly, so movement

@@ -4,7 +4,8 @@
 // live snapshot) and window.__novaDebug (addXp / setHp). It also honours
 // the ?seed= and ?shot= URL parameters the tools rely on.
 
-import { TUNE } from './config.js';
+import { UPGRADES } from './upgrades.js';
+import { updateFeedback } from './feedback.js';
 import { createAudio } from './audio.js';
 import { createInput } from './input.js';
 import { createRng, hashSeed } from './random.js';
@@ -18,6 +19,7 @@ import {
   startRun,
   tryDash,
   updateWorld,
+  spawnOne,
 } from './world.js';
 
 const STEP = 1 / 60;
@@ -29,7 +31,7 @@ function boot() {
   const seedParam = params.get('seed');
   const shotParam = params.get('shot');
   const rng = createRng(
-    seedParam !== null ? hashSeed(seedParam) : (Date.now() % 2147483647),
+    seedParam !== null ? hashSeed(seedParam) : (shotParam !== null ? hashSeed('nova-shot-1337') : Date.now() % 2147483647),
   );
 
   const audio = createAudio();
@@ -37,6 +39,7 @@ function boot() {
   const renderer = createRenderer(canvas);
   const state = createWorld(window.innerWidth, window.innerHeight, rng);
   try {
+    state.reduceMotion = window.localStorage.getItem('nova-reduce-motion') === '1';
     const saved = window.localStorage.getItem('nova-swarm-best');
     state.best = saved === null ? 0 : Math.max(0, parseInt(saved, 10) || 0);
   } catch {
@@ -74,7 +77,7 @@ function boot() {
   };
 
   function refreshNova() {
-    Object.assign(window.__nova, novaSnapshot(state));
+    novaSnapshot(state, window.__nova);
   }
 
   function toggleMute() {
@@ -83,11 +86,16 @@ function boot() {
 
   // One frame's worth of one-shot keys, by screen.
   function handleKeys() {
+    if (input.takePressed('KeyG')) {
+      state.reduceMotion = !state.reduceMotion;
+      try { localStorage.setItem('nova-reduce-motion', state.reduceMotion ? '1' : '0'); } catch {}
+    }
     if (input.takePressed('KeyM')) toggleMute();
     if (state.screen === 'title') {
       if (input.takePressed('Enter')) {
         audio.unlock();
         audio.startMusic();
+        state.demo = false;
         startRun(state);
       }
     } else if (state.screen === 'play') {
@@ -124,30 +132,41 @@ function boot() {
   let last = performance.now();
   let acc = 0;
   function frame(now) {
-    const dt = Math.min(0.1, Math.max(0, (now - last) / 1000));
+    const realDt = Math.max(0, (now - last) / 1000);
+    const dt = Math.min(0.1, realDt);
     last = now;
-    handleKeys();
+    updateFeedback(state, realDt);
+    // During a stop keep one-shot movement input buffered until simulation resumes.
+    if (state.timeScale !== 0) handleKeys();
+    if (state.screen === 'title') {
+      demoStep(dt);
+    }
     if (state.screen === 'play') {
-      acc += dt;
+      acc += dt * state.timeScale;
       let steps = 0;
       while (acc >= STEP && steps < MAX_STEPS) {
         updateWorld(state, input, STEP);
         acc -= STEP;
         steps += 1;
+        if (state.timeScale === 0) { acc = 0; break; }
         if (state.screen !== 'play') break;
       }
       if (steps === MAX_STEPS) acc = 0;
     }
     drainSfx();
-    renderer.draw(state, input, audio.isMuted());
+    renderer.draw(state, state.screen === 'title' ? pilot : input, audio.isMuted());
     refreshNova();
-    input.endFrame();
+    if (state.timeScale !== 0) input.endFrame();
     window.requestAnimationFrame(frame);
   }
 
   // A fake input that plays the game by itself: it aims at the nearest
   // foe, holds the trigger down, and strolls in a slow circle. The shot
   // poses fast-forward with it so their screenshots show a real game.
+  const pilot = {
+    held: new Set(), mouse: { x: 0, y: 0, down: true },
+    isDown(code) { return this.held.has(code); }, takePressed() { return false; },
+  };
   function autopilot(step) {
     let target = null;
     let best = Infinity;
@@ -161,26 +180,24 @@ function boot() {
     const aimX = target ? target.x : state.player.x + 120;
     const aimY = target ? target.y : state.player.y;
     const a = step * 0.02;
-    const held = new Set();
+    const held = pilot.held;
+    held.clear();
     if (Math.cos(a) > 0.3) held.add('KeyD');
     else if (Math.cos(a) < -0.3) held.add('KeyA');
     if (Math.sin(a) > 0.3) held.add('KeyS');
     else if (Math.sin(a) < -0.3) held.add('KeyW');
-    return {
-      held,
-      pressed: new Set(),
-      mouse: { x: aimX, y: aimY, down: true },
-      isDown(code) {
-        return held.has(code);
-      },
-      takePressed() {
-        return false;
-      },
-      wasPressed() {
-        return false;
-      },
-      endFrame() {},
-    };
+    pilot.mouse.x = aimX; pilot.mouse.y = aimY;
+    return pilot;
+  }
+  let demoTick = 0;
+  function demoStep(dt) {
+    if (state.timeScale === 0) return;
+    state.demo = true;
+    state.screen = 'play';
+    updateWorld(state, autopilot(demoTick++), dt);
+    while (state.screen === 'levelup') pickCard(state, 0);
+    if (state.screen === 'over') startRun(state);
+    state.screen = 'title';
   }
 
   // Step the sim `seconds` worth with the autopilot, resolving level-ups
@@ -196,17 +213,37 @@ function boot() {
         startRun(state);
         continue;
       }
+      state.player.hp = state.player.maxHp;
+      updateFeedback(state, STEP);
       updateWorld(state, autopilot(i), STEP);
+      state.sfx.length = 0;
     }
     while (state.screen === 'levelup') pickCard(state, 0);
     if (state.screen === 'over') startRun(state);
   }
 
+  function stageSwarm() {
+    while (state.enemies.length < 16) spawnOne(state, state.rng.pick(['chaser', 'weaver', 'splitter', 'dasher']));
+    state.player.shots = Math.max(state.player.shots, 3);
+    state.player.crit = Math.max(state.player.crit, 0.3);
+    fastForward(1.3);
+    // Finish on a genuine impact with a simultaneous volley in flight.
+    for (let i = 0; i < 90; i++) {
+      state.player.hp = state.player.maxHp;
+      while (state.screen === 'levelup') pickCard(state, 0);
+      updateFeedback(state, STEP); updateWorld(state, autopilot(i), STEP);
+      if (state.particles.length >= 10 && state.bullets.length >= 3 && state.enemies.length >= 12) break;
+    }
+  }
+
   // The ?shot= poses the screenshot tool asks for.
   function setupShotPose(pose) {
     if (pose === 'start') {
-      // The title screen is already showing: one frame, then ready.
-      renderer.draw(state, input, false);
+      startRun(state);
+      fastForward(8);
+      stageSwarm();
+      state.screen = 'title';
+      renderer.draw(state, pilot, false);
       refreshNova();
       window.__shotReady = true;
       return;
@@ -215,9 +252,41 @@ function boot() {
     startRun(state);
     if (pose === 'play') {
       fastForward(20);
+      stageSwarm();
     } else if (pose === 'levelup') {
       fastForward(6);
+      stageSwarm();
       addXp(state, 200);
+      // Include the longest description as a visual wrapping regression.
+      state.offer = [UPGRADES.find(d => d.id === 'nova'), ...state.offer.filter(d => d.id !== 'nova')].slice(0, 3);
+    } else if (pose === 'boss') {
+      let framed = false;
+      for (let i = 0; i < 36000 && !(state.wave >= 5 && state.boss && state.ebullets.length >= 10); i++) {
+        state.player.hp = state.player.maxHp;
+        while (state.screen === 'levelup') pickCard(state, 0);
+        if (state.screen === 'over') throw new Error('Boss staging failed');
+        updateFeedback(state, STEP);
+        const controls = autopilot(i);
+        if (state.boss) {
+          if (!framed) {
+            state.boss.x = state.width * 0.64; state.boss.y = state.height * 0.51;
+            state.player.x = state.width * 0.37; state.player.y = state.height * 0.57;
+            framed = true;
+          }
+          controls.held.clear();
+        }
+        updateWorld(state, controls, STEP);
+        state.sfx.length = 0;
+      }
+      if (!state.boss || state.ebullets.length < 10) throw new Error('Boss ring missing');
+      // Let the first ring expand visibly, with real escorts from the edges.
+      for (let i = 0; i < 24; i++) {
+        state.player.hp = state.player.maxHp;
+        while (state.screen === 'levelup') pickCard(state, 0);
+        updateFeedback(state, STEP);
+        const controls = autopilot(i); controls.held.clear();
+        updateWorld(state, controls, STEP);
+      }
     } else if (pose === 'end') {
       fastForward(14);
       state.player.invulnT = 0;
@@ -225,13 +294,14 @@ function boot() {
       state.player.hp = 1;
       damagePlayer(state, 999);
     }
-    renderer.draw(state, input, false);
+    state.player.invulnT = 0;
+    renderer.draw(state, pilot, false);
     refreshNova();
     window.__shotReady = true;
   }
 
   if (shotParam !== null) setupShotPose(shotParam);
-  window.requestAnimationFrame(frame);
+  else { startRun(state); state.demo = true; state.screen = 'title'; window.requestAnimationFrame(frame); }
 }
 
 boot();

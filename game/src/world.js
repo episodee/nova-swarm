@@ -4,7 +4,9 @@
 // rewards staying aggressive. The renderer only reads this state; the
 // audio only hears it through the sfx queue.
 
-import { FOES, PALETTE, TUNE, waveRoster, waveSize } from './config.js';
+import { hitStop } from './feedback.js';
+import { makePool, take, particle, floater, retire, clearPool } from './pools.js';
+import { PALETTE, TUNE, waveRoster, waveSize } from './config.js';
 import { createEnemy, updateEnemy } from './entities.js';
 import { moveVector } from './input.js';
 import { fireWeapons, updateBullets, updateEnemyBullets, updateNova } from './shots.js';
@@ -12,11 +14,11 @@ import { rollOffers, takeOffer, xpNeedFor } from './upgrades.js';
 
 // A fresh world, before any run has started.
 export function createWorld(width, height, rng) {
-  return {
+  const state = {
     width,
     height,
     rng,
-    screen: 'title',
+    screen: 'title', demo: false,
     time: 0,
     score: 0,
     kills: 0,
@@ -40,13 +42,27 @@ export function createWorld(width, height, rng) {
     floaters: [],
     fireT: 0,
     novaT: 0,
-    shake: 0,
+    shake: 0, realTime: 0, stopId: 0, stopOwner: 0, stopT: 0, timeScale: 1,
+    hurtFlash: 0, muzzleT: 0, pickupT: 0, shipScale: 1, zoom: 1, zoomT: 0, reduceMotion: false,
     boss: null,
     sfx: [],
     best: 0,
     spawnQueue: [],
     spawnT: 0,
+    enemyPool: makePool(256, () => ({})),
+    bulletPool: makePool(256, () => ({hitRefs: new Array(16).fill(null)})),
+    ebulletPool: makePool(256, () => ({})),
+    shardPool: makePool(256, () => ({})),
+    particlePool: makePool(320, () => ({kind:'spark', x:0,y:0,vx:0,vy:0,life:0,maxLife:1,size:1,color:'#ffffff',radius:0,max:0})),
+    floaterPool: makePool(100, () => ({x:0,y:0,text:'',life:0,maxLife:1,color:'#ffffff',crit:false})),
   };
+  state.enemyContext = {
+    player: state.player, rng, time: 0, width, height, sfx: state.sfx,
+    spawnEnemy(type, x, y) { const e = take(state.enemyPool, state.enemies); if (e) createEnemy(type, x, y, state.wave, rng, e); },
+    fireBullet(x, y, vx, vy) { const b = take(state.ebulletPool, state.ebullets); if (b) { b.x=x; b.y=y; b.vx=vx; b.vy=vy; b.radius=6; b.damage=8; b.life=6; } },
+    enemyCount() { return state.enemies.length; },
+  };
+  return state;
 }
 
 // The ship as a new run finds it: base stats, no upgrades, full hull.
@@ -79,12 +95,12 @@ function freshShip(x, y) {
 export function startRun(state) {
   const ship = freshShip(state.width / 2, state.height / 2);
   state.player = ship;
-  state.enemies = [];
-  state.bullets = [];
-  state.ebullets = [];
-  state.shards = [];
-  state.particles = [];
-  state.floaters = [];
+  clearPool(state.enemyPool, state.enemies);
+  clearPool(state.bulletPool, state.bullets);
+  clearPool(state.ebulletPool, state.ebullets);
+  clearPool(state.shardPool, state.shards);
+  clearPool(state.particlePool, state.particles);
+  clearPool(state.floaterPool, state.floaters);
   state.time = 0;
   state.score = 0;
   state.kills = 0;
@@ -102,6 +118,7 @@ export function startRun(state) {
   state.fireT = 0;
   state.novaT = 0;
   state.shake = 0;
+  state.stopT = 0; state.timeScale = 1; state.pickupT = 0; state.shipScale = 1; state.hurtFlash = 0; state.muzzleT = 0; state.zoomT = 0;
   state.boss = null;
   state.sfx = [];
   state.spawnQueue = [];
@@ -132,6 +149,7 @@ function fillWave(state) {
 }
 
 // A spawn point on a random edge, kept away from the ship.
+const edge = {x:0,y:0};
 function edgePoint(state) {
   const m = 34;
   const ship = state.player;
@@ -143,15 +161,16 @@ function edgePoint(state) {
     else if (side === 1) { x = state.rng.range(m, state.width - m); y = state.height - m; }
     else if (side === 2) { x = m; y = state.rng.range(m, state.height - m); }
     else { x = state.width - m; y = state.rng.range(m, state.height - m); }
-    if (Math.hypot(x - ship.x, y - ship.y) > 280) return { x, y };
+    if (Math.hypot(x - ship.x, y - ship.y) > 280) { edge.x = x; edge.y = y; return edge; }
   }
-  return { x: m, y: m };
+  edge.x = m; edge.y = m; return edge;
 }
 
-function spawnOne(state, type) {
+export function spawnOne(state, type) {
   const at = edgePoint(state);
-  const foe = createEnemy(type, at.x, at.y, state.wave, state.rng);
-  state.enemies.push(foe);
+  const foe = take(state.enemyPool, state.enemies);
+  if (!foe) return null;
+  createEnemy(type, at.x, at.y, state.wave, state.rng, foe);
   if (type === 'boss') {
     state.boss = foe;
     state.sfx.push('boss');
@@ -205,12 +224,11 @@ export function tryDash(state, input) {
   ship.invulnT = Math.max(ship.invulnT, TUNE.dashTime + 0.08);
   state.sfx.push('dash');
   for (let i = 0; i < 6; i++) {
-    state.particles.push({
-      kind: 'spark', x: ship.x, y: ship.y,
-      vx: -ship.dashX * 120 + state.rng.range(-40, 40),
-      vy: -ship.dashY * 120 + state.rng.range(-40, 40),
-      life: 0.3, maxLife: 0.3, size: 2, color: PALETTE.player,
-    });
+    const p = particle(state, 'spark', ship.x, ship.y, PALETTE.player, 0.3);
+    if (p) {
+      p.vx = -ship.dashX * 120 + state.rng.range(-40, 40);
+      p.vy = -ship.dashY * 120 + state.rng.range(-40, 40); p.size = 2;
+    }
   }
 }
 
@@ -222,6 +240,8 @@ export function damagePlayer(state, amount) {
   ship.hp -= amount;
   ship.invulnT = TUNE.hurtInvuln;
   state.shake = Math.max(state.shake, 0.5);
+  state.hurtFlash = 0.8;
+  hitStop(state, 0.06);
   state.sfx.push('hurt');
   burst(state, ship.x, ship.y, PALETTE.danger, 8);
   if (ship.hp <= 0) killPlayer(state);
@@ -231,11 +251,12 @@ function killPlayer(state) {
   const ship = state.player;
   ship.hp = 0;
   state.screen = 'over';
+  hitStop(state, 0.12);
   state.sfx.push('explode');
   burst(state, ship.x, ship.y, PALETTE.player, 26);
   burst(state, ship.x, ship.y, '#ffffff', 12);
   state.shake = 1;
-  if (state.score > state.best) {
+  if (!state.demo && state.score > state.best) {
     state.best = state.score;
     try {
       window.localStorage.setItem('nova-swarm-best', String(state.best));
@@ -254,29 +275,28 @@ function killEnemy(state, foe) {
   const mult = 1 + (state.combo - 1) * 0.25;
   const gained = Math.round(foe.score * mult);
   state.score += gained;
-  state.floaters.push({
-    x: foe.x, y: foe.y - 10, text: `+${gained}`,
-    life: 0.9, maxLife: 0.9, color: state.combo >= 4 ? PALETTE.gold : PALETTE.text,
-  });
+  floater(state, foe.x, foe.y - 10, `+${gained}`, state.combo >= 4 ? PALETTE.gold : PALETTE.text);
   burst(state, foe.x, foe.y, foe.color, foe.type === 'boss' ? 30 : 10);
   state.sfx.push('explode');
   const dropChance = foe.type === 'mini' ? 0.3 : TUNE.shardDropChance;
   if (state.rng.chance(dropChance)) {
-    state.shards.push({
-      x: foe.x, y: foe.y,
-      vx: state.rng.range(-30, 30), vy: state.rng.range(-30, 30),
-      value: TUNE.shardValue, life: TUNE.shardLife, t: 0,
-    });
+    const shard = take(state.shardPool, state.shards);
+    if (shard) {
+      shard.x = foe.x; shard.y = foe.y;
+      shard.vx = state.rng.range(-30, 30); shard.vy = state.rng.range(-30, 30);
+      shard.value = TUNE.shardValue; shard.life = TUNE.shardLife; shard.t = 0;
+    }
   }
   if (foe.type === 'splitter') {
     for (let i = 0; i < 2; i++) {
-      const mini = createEnemy('mini', foe.x + state.rng.range(-14, 14), foe.y + state.rng.range(-14, 14), state.wave, state.rng);
-      state.enemies.push(mini);
+      const mini = take(state.enemyPool, state.enemies);
+      if (mini) createEnemy('mini', foe.x + state.rng.range(-14, 14), foe.y + state.rng.range(-14, 14), state.wave, state.rng, mini);
     }
   }
   if (foe.type === 'boss') {
     state.boss = null;
     state.shake = 1;
+    hitStop(state, 0.12);
   }
 }
 
@@ -284,11 +304,8 @@ function burst(state, x, y, color, count) {
   for (let i = 0; i < count; i++) {
     const angle = state.rng.next() * Math.PI * 2;
     const speed = state.rng.range(40, 220);
-    state.particles.push({
-      kind: 'spark', x, y,
-      vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-      life: state.rng.range(0.25, 0.6), maxLife: 0.6, size: state.rng.range(1.5, 3.5), color,
-    });
+    const p = particle(state, 'spark', x, y, color, state.rng.range(0.25, 0.6));
+    if (p) { p.vx = Math.cos(angle) * speed; p.vy = Math.sin(angle) * speed; p.size = state.rng.range(1.5, 3.5); }
   }
 }
 
@@ -304,6 +321,7 @@ export function addXp(state, amount) {
   }
   if (state.pending > 0 && state.screen === 'play') {
     state.screen = 'levelup';
+    state.zoomT = 0.24;
     state.offer = rollOffers(state.rng, state.player);
     state.sfx.push('levelup');
   }
@@ -332,7 +350,7 @@ export function updateWorld(state, input, dt) {
     state.comboTimer -= dt;
     if (state.comboTimer <= 0) state.combo = 0;
   }
-  if (state.shake > 0) state.shake = Math.max(0, state.shake - dt * 2.2);
+
 
   moveShip(state, input, dt);
   fireWeapons(state, input, dt);
@@ -344,34 +362,23 @@ export function updateWorld(state, input, dt) {
   if (state.spawnQueue.length > 0) {
     state.spawnT -= dt;
     if (state.spawnT <= 0) {
-      state.spawnT = 0.35;
+      state.spawnT = 0.25;
       spawnOne(state, state.spawnQueue.shift());
     }
   }
 
-  const ctx = {
-    player: state.player,
-    rng: state.rng,
-    time: state.time,
-    width: state.width,
-    height: state.height,
-    sfx: state.sfx,
-    spawnEnemy: (type, x, y) => {
-      state.enemies.push(createEnemy(type, x, y, state.wave, state.rng));
-    },
-    fireBullet: (x, y, vx, vy) => {
-      state.ebullets.push({ x, y, vx, vy, radius: 6, damage: 8, life: 6 });
-    },
-    enemyCount: () => state.enemies.length,
-  };
+  const ctx = state.enemyContext;
+  ctx.player = state.player; ctx.time = state.time; ctx.width = state.width; ctx.height = state.height; ctx.sfx = state.sfx;
   for (const foe of state.enemies) updateEnemy(foe, ctx, dt);
 
   // Sweep the dead: score them, then drop them from the list.
   for (let i = state.enemies.length - 1; i >= 0; i--) {
     if (!state.enemies[i].dead) continue;
     const foe = state.enemies[i];
-    state.enemies.splice(i, 1);
+    for (let j = i; j < state.enemies.length - 1; j++) state.enemies[j] = state.enemies[j + 1];
+    state.enemies.pop();
     killEnemy(state, foe);
+    state.enemyPool.push(foe);
   }
 
   // Touching a foe hurts. The foe is shoved off so it cannot sit on you.
@@ -406,12 +413,13 @@ export function updateWorld(state, input, dt) {
     s.vx *= 0.94;
     s.vy *= 0.94;
     if (dist < TUNE.pickupRadius) {
-      state.shards.splice(i, 1);
+      retire(state.shardPool, state.shards, i);
+      state.pickupT = 0.12;
       state.sfx.push('pickup');
       addXp(state, s.value);
       continue;
     }
-    if (s.life <= 0) state.shards.splice(i, 1);
+    if (s.life <= 0) retire(state.shardPool, state.shards, i);
   }
 
   // A cleared wave breathes, then the next one arrives.
@@ -439,28 +447,24 @@ export function updateWorld(state, input, dt) {
       p.vx *= 0.96;
       p.vy *= 0.96;
     }
-    if (p.life <= 0) state.particles.splice(i, 1);
+    if (p.life <= 0) retire(state.particlePool, state.particles, i);
   }
-  if (state.particles.length > 220) state.particles.splice(0, state.particles.length - 220);
+
   for (let i = state.floaters.length - 1; i >= 0; i--) {
     const f = state.floaters[i];
     f.life -= dt;
     f.y -= 34 * dt;
-    if (f.life <= 0) state.floaters.splice(i, 1);
+    if (f.life <= 0) retire(state.floaterPool, state.floaters, i);
   }
 }
 
 // What the tests and the HUD read: one flat snapshot of the run.
-export function novaSnapshot(state) {
-  return {
-    screen: state.screen,
-    time: Math.round(state.time * 10) / 10,
-    score: state.score,
-    kills: state.kills,
-    wave: state.wave,
-    enemies: state.enemies.length,
-    hp: Math.max(0, Math.ceil(state.player.hp)),
-    upgrades: state.upgrades,
-    pending: state.pending,
-  };
+export function novaSnapshot(state, out = {}) {
+  out.screen = state.screen; out.time = Math.round(state.time * 10) / 10;
+  out.score = state.score; out.kills = state.kills; out.wave = state.wave;
+  out.enemies = state.enemies.length; out.hp = Math.max(0, Math.ceil(state.player.hp));
+  out.boss = state.boss !== null; out.enemyBullets = state.ebullets.length;
+  out.bullets = state.bullets.length; out.particles = state.particles.length;
+  out.upgrades = state.upgrades; out.pending = state.pending;
+  return out;
 }

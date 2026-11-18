@@ -14,7 +14,13 @@ Kills drop XP shards; enough XP earns a level, and every level offers a
 choice of three upgrade cards (damage, fire rate, multishot, piercing,
 critical hits, magnet, dash, hull, and the Nova Pulse shockwave), so no
 two runs build the same ship. Kills chain into a combo multiplier, the
-waves keep getting harder, and your best score is kept in localStorage.
+denser waves keep getting harder. Game over offers R to restart; your best
+score is kept in localStorage. A live autopilot swarm animates the title
+behind its overlay. Nebulae, bright tracers, critical damage numbers, muzzle
+glow, pickup squash, impact hit-stop, smooth trauma shake and Nova/level-up
+zoom punches make combat readable. G saves a reduce-motion setting that
+disables camera motion and flashes. Seeded capture poses include the wave-5
+boss and its bullet ring (see screenshots/).
 
 ## Run it
 
@@ -28,7 +34,7 @@ node serve.ts
 - WASD / Arrow keys — move
 - Mouse — aim, hold left click — fire
 - Space / Shift — dash (brief invulnerability)
-- P — pause, M — mute, R — restart after game over
+- P — pause, M — mute, G — reduce motion, R — restart after game over
 - 1 / 2 / 3 — pick an upgrade card on level-up
 
 ## The swarm
@@ -40,10 +46,6 @@ node serve.ts
 - **Voidborn Prime** — the boss of every fifth wave: slow, huge, firing
   rings of bullets and spawning minions, with its own health bar.
 
-Kills chain into a combo multiplier (up to x8), and every level offers
-three upgrade cards: Heavy Rounds, Rapid Cycler, Split Cannon, Lance
-Rounds, Deadeye Core, Tractor Field, Overdrive Dash, Ablative Hull, and
-the Nova Pulse shockwave.
 
 ---
 

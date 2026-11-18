@@ -7,14 +7,14 @@ const GAME_KEYS = new Set([
   'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
   'KeyW', 'KeyA', 'KeyS', 'KeyD',
   'Space', 'ShiftLeft', 'ShiftRight',
-  'Enter', 'KeyP', 'KeyR', 'KeyM',
+  'KeyG', 'Enter', 'KeyP', 'KeyR', 'KeyM',
   'Digit1', 'Digit2', 'Digit3', 'Escape',
 ]);
 
 export function createInput(canvas) {
   const held = new Set();
   const pressed = new Set();
-  const mouse = { x: 0, y: 0, down: false };
+  const mouse = { x: 0, y: 0, down: false, buffered: false };
 
   function toCanvas(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
@@ -46,6 +46,7 @@ export function createInput(canvas) {
     mouse.x = p.x;
     mouse.y = p.y;
     mouse.down = true;
+    mouse.buffered = true;
   }
 
   function onMouseUp(event) {
@@ -55,7 +56,7 @@ export function createInput(canvas) {
 
   function onBlur() {
     held.clear();
-    mouse.down = false;
+    mouse.down = false; mouse.buffered = false;
   }
 
   function onContextMenu(event) {
@@ -105,6 +106,7 @@ export function createInput(canvas) {
 }
 
 // Movement intent from WASD or the arrow keys, as a unit-ish vector.
+const movement = {x:0,y:0};
 export function moveVector(input) {
   let x = 0;
   let y = 0;
@@ -117,5 +119,6 @@ export function moveVector(input) {
     x *= inv;
     y *= inv;
   }
-  return { x, y };
+  movement.x = x; movement.y = y;
+  return movement;
 }

@@ -45,7 +45,7 @@ export const TUNE = {
 
 // How many foes a wave fields (boss waves add the boss on top of this).
 export function waveSize(wave) {
-  return 5 + 2 * (wave - 1);
+  return 7 + 2 * (wave - 1);
 }
 
 // Which foe kinds a wave may field. The roster grows as the run goes on.

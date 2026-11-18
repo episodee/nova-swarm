@@ -1,3 +1,4 @@
+import { UPGRADES } from './upgrades.js';
 // NOVA SWARM — the renderer. Canvas 2D, no libraries, no shadowBlur
 // (software rendering chokes on it): glow comes from small pre-rendered
 // radial sprites, and everything else is plain paths and text. The world,
@@ -32,11 +33,12 @@ function blitGlow(ctx, color, x, y, size, alpha) {
   ctx.globalAlpha = 1;
 }
 
+const points = new Float64Array(16);
 // A polygon from a list of [x, y] points, filled with one colour.
-function poly(ctx, points, fill) {
+function poly(ctx, points, fill, count = points.length / 2) {
   ctx.beginPath();
-  ctx.moveTo(points[0][0], points[0][1]);
-  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1]);
+  ctx.moveTo(points[0], points[1]);
+  for (let i = 1; i < count; i++) ctx.lineTo(points[i * 2], points[i * 2 + 1]);
   ctx.closePath();
   ctx.fillStyle = fill;
   ctx.fill();
@@ -54,7 +56,7 @@ function circle(ctx, x, y, r, fill) {
 function makeStars(width, height) {
   const next = mulberry32(1337);
   const stars = [];
-  for (let i = 0; i < 110; i++) {
+  for (let i = 0; i < 220; i++) {
     stars.push({
       x: next() * width,
       y: next() * height,
@@ -67,8 +69,8 @@ function makeStars(width, height) {
 }
 
 function drawBackground(ctx, state, stars, time) {
-  ctx.fillStyle = PALETTE.background;
-  ctx.fillRect(0, 0, state.width, state.height);
+  // Background colour + nebula are already painted by drawWorld; here only
+  // the grid and the twinkling stars are drawn, inside the camera transform.
   ctx.strokeStyle = PALETTE.grid;
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -84,7 +86,7 @@ function drawBackground(ctx, state, stars, time) {
   for (const s of stars) {
     const a = 0.25 + 0.55 * (0.5 + 0.5 * Math.sin(time * s.speed + s.phase));
     ctx.globalAlpha = a;
-    circle(ctx, s.x, s.y, s.r, PALETTE.star);
+    circle(ctx, (s.x + Math.sin(time * 0.04) * (s.r < 1.4 ? 8 : 2) + state.width) % state.width, s.y, s.r, PALETTE.star);
   }
   ctx.globalAlpha = 1;
 }
@@ -94,12 +96,11 @@ function drawShards(ctx, state) {
     const blink = s.life < 3 ? (Math.sin(s.t * 14) > 0 ? 1 : 0.35) : 1;
     ctx.globalAlpha = blink;
     blitGlow(ctx, PALETTE.shard, s.x, s.y, 26, 0.55);
-    poly(ctx, [
-      [s.x, s.y - 6],
-      [s.x + 4.5, s.y],
-      [s.x, s.y + 6],
-      [s.x - 4.5, s.y],
-    ], PALETTE.shard);
+    points[0] = s.x; points[1] = s.y - 6;
+    points[2] = s.x + 4.5; points[3] = s.y;
+    points[4] = s.x; points[5] = s.y + 6;
+    points[6] = s.x - 4.5; points[7] = s.y;
+    poly(ctx, points, PALETTE.shard, 4);
     ctx.globalAlpha = 1;
   }
 }
@@ -107,32 +108,31 @@ function drawShards(ctx, state) {
 function drawEnemy(ctx, e, state) {
   blitGlow(ctx, e.color, e.x, e.y, e.radius * 3.4, 0.5);
   const aim = Math.atan2(state.player.y - e.y, state.player.x - e.x);
-  const flashing = e.type === 'dasher' && e.mode === 'aim' && Math.sin(e.t * 30) > 0;
+  const flashing = e.type === 'dasher' && e.mode === 'aim' && !state.reduceMotion && Math.sin(e.t * 30) > 0;
   const body = flashing ? '#ffffff' : e.color;
   const r = e.radius;
   if (e.type === 'chaser') {
-    const pts = [];
+
     for (let i = 0; i < 3; i++) {
       const a = aim + (i / 3) * Math.PI * 2;
-      pts.push([e.x + Math.cos(a) * r, e.y + Math.sin(a) * r]);
+      points[i * 2] = e.x + Math.cos(a) * r; points[i * 2 + 1] = e.y + Math.sin(a) * r;
     }
-    poly(ctx, pts, body);
+    poly(ctx, points, body, 3);
   } else if (e.type === 'weaver') {
-    poly(ctx, [
-      [e.x + Math.cos(aim) * r, e.y + Math.sin(aim) * r],
-      [e.x + Math.cos(aim + Math.PI / 2) * r * 0.7, e.y + Math.sin(aim + Math.PI / 2) * r * 0.7],
-      [e.x - Math.cos(aim) * r, e.y - Math.sin(aim) * r],
-      [e.x - Math.cos(aim + Math.PI / 2) * r * 0.7, e.y - Math.sin(aim + Math.PI / 2) * r * 0.7],
-    ], body);
+    points[0] = e.x + Math.cos(aim) * r; points[1] = e.y + Math.sin(aim) * r;
+    points[2] = e.x + Math.cos(aim + Math.PI / 2) * r * 0.7; points[3] = e.y + Math.sin(aim + Math.PI / 2) * r * 0.7;
+    points[4] = e.x - Math.cos(aim) * r; points[5] = e.y - Math.sin(aim) * r;
+    points[6] = e.x - Math.cos(aim + Math.PI / 2) * r * 0.7; points[7] = e.y - Math.sin(aim + Math.PI / 2) * r * 0.7;
+    poly(ctx, points, body, 4);
   } else if (e.type === 'splitter' || e.type === 'boss') {
     const sides = e.type === 'boss' ? 8 : 6;
     const rot = e.t * (e.type === 'boss' ? 0.5 : 0.8);
-    const pts = [];
+
     for (let i = 0; i < sides; i++) {
       const a = rot + (i / sides) * Math.PI * 2;
-      pts.push([e.x + Math.cos(a) * r, e.y + Math.sin(a) * r]);
+      points[i * 2] = e.x + Math.cos(a) * r; points[i * 2 + 1] = e.y + Math.sin(a) * r;
     }
-    poly(ctx, pts, body);
+    poly(ctx, points, body, sides);
     if (e.type === 'boss') {
       ctx.strokeStyle = '#ffffff';
       ctx.globalAlpha = 0.65;
@@ -145,76 +145,69 @@ function drawEnemy(ctx, e, state) {
       circle(ctx, e.x, e.y, r * 0.2, body);
     }
   } else if (e.type === 'dasher') {
-    poly(ctx, [
-      [e.x + Math.cos(aim) * r * 1.25, e.y + Math.sin(aim) * r * 1.25],
-      [e.x + Math.cos(aim + 2.5) * r, e.y + Math.sin(aim + 2.5) * r],
-      [e.x - Math.cos(aim) * r * 0.5, e.y - Math.sin(aim) * r * 0.5],
-      [e.x + Math.cos(aim - 2.5) * r, e.y + Math.sin(aim - 2.5) * r],
-    ], body);
+    points[0] = e.x + Math.cos(aim) * r * 1.25; points[1] = e.y + Math.sin(aim) * r * 1.25;
+    points[2] = e.x + Math.cos(aim + 2.5) * r; points[3] = e.y + Math.sin(aim + 2.5) * r;
+    points[4] = e.x - Math.cos(aim) * r * 0.5; points[5] = e.y - Math.sin(aim) * r * 0.5;
+    points[6] = e.x + Math.cos(aim - 2.5) * r; points[7] = e.y + Math.sin(aim - 2.5) * r;
+    poly(ctx, points, body, 4);
   } else {
     // Mini: a small, fast triangle.
-    const pts = [];
+
     for (let i = 0; i < 3; i++) {
       const a = aim + (i / 3) * Math.PI * 2;
-      pts.push([e.x + Math.cos(a) * r, e.y + Math.sin(a) * r]);
+      points[i * 2] = e.x + Math.cos(a) * r; points[i * 2 + 1] = e.y + Math.sin(a) * r;
     }
-    poly(ctx, pts, body);
+    poly(ctx, points, body, 3);
   }
   // A white flash for a split second after a hit lands.
-  if (e.flash > 0) {
+  if (e.flash > 0 && !state.reduceMotion) {
     ctx.globalAlpha = Math.min(1, e.flash / 0.09) * 0.85;
     circle(ctx, e.x, e.y, r * 0.8, '#ffffff');
     ctx.globalAlpha = 1;
   }
-  // The boss wears its health where everyone can see it.
-  if (e.type === 'boss') {
-    const w = 220;
-    const x = state.width / 2 - w / 2;
-    const y = 46;
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(x - 4, y - 4, w + 8, 16);
-    ctx.fillStyle = '#3a2a66';
-    ctx.fillRect(x, y, w, 8);
-    ctx.fillStyle = e.color;
-    ctx.fillRect(x, y, w * Math.max(0, e.hp / e.maxHp), 8);
-  }
+
 }
 
 function drawPlayer(ctx, state, input) {
   const ship = state.player;
   if (state.screen === 'over') return;
-  if (ship.invulnT > 0 && ship.dashT <= 0 && Math.floor(state.time * 14) % 2 === 0) return;
+  if (!state.reduceMotion && ship.invulnT > 0 && ship.dashT <= 0 && Math.floor(state.time * 14) % 2 === 0) return;
   const aim = Math.atan2(input.mouse.y - ship.y, input.mouse.x - ship.x);
   blitGlow(ctx, PALETTE.player, ship.x, ship.y, ship.radius * 4.4, 0.65);
   if (ship.thrust > 0) {
     const back = aim + Math.PI;
-    const flick = 10 + Math.sin(state.time * 40) * 4;
-    poly(ctx, [
-      [ship.x + Math.cos(back) * ship.radius * 0.9, ship.y + Math.sin(back) * ship.radius * 0.9],
-      [ship.x + Math.cos(back + 0.42) * ship.radius * 0.7, ship.y + Math.sin(back + 0.42) * ship.radius * 0.7],
-      [ship.x + Math.cos(back) * (ship.radius + flick), ship.y + Math.sin(back) * (ship.radius + flick)],
-      [ship.x + Math.cos(back - 0.42) * ship.radius * 0.7, ship.y + Math.sin(back - 0.42) * ship.radius * 0.7],
-    ], '#ffb347');
+    const flick = 10 + Math.sin(state.realTime * 40) * 4;
+    points[0] = ship.x + Math.cos(back) * ship.radius * 0.9; points[1] = ship.y + Math.sin(back) * ship.radius * 0.9;
+    points[2] = ship.x + Math.cos(back + 0.42) * ship.radius * 0.7; points[3] = ship.y + Math.sin(back + 0.42) * ship.radius * 0.7;
+    points[4] = ship.x + Math.cos(back) * (ship.radius + flick); points[5] = ship.y + Math.sin(back) * (ship.radius + flick);
+    points[6] = ship.x + Math.cos(back - 0.42) * ship.radius * 0.7; points[7] = ship.y + Math.sin(back - 0.42) * ship.radius * 0.7;
+    poly(ctx, points, '#ffb347', 4);
   }
-  const r = ship.radius;
-  poly(ctx, [
-    [ship.x + Math.cos(aim) * r * 1.3, ship.y + Math.sin(aim) * r * 1.3],
-    [ship.x + Math.cos(aim + 2.45) * r, ship.y + Math.sin(aim + 2.45) * r],
-    [ship.x + Math.cos(aim + Math.PI) * r * 0.55, ship.y + Math.sin(aim + Math.PI) * r * 0.55],
-    [ship.x + Math.cos(aim - 2.45) * r, ship.y + Math.sin(aim - 2.45) * r],
-  ], PALETTE.player);
+  const r = ship.radius * state.shipScale;
+  points[0] = ship.x + Math.cos(aim) * r * 1.3; points[1] = ship.y + Math.sin(aim) * r * 1.3;
+    points[2] = ship.x + Math.cos(aim + 2.45) * r; points[3] = ship.y + Math.sin(aim + 2.45) * r;
+    points[4] = ship.x + Math.cos(aim + Math.PI) * r * 0.55; points[5] = ship.y + Math.sin(aim + Math.PI) * r * 0.55;
+    points[6] = ship.x + Math.cos(aim - 2.45) * r; points[7] = ship.y + Math.sin(aim - 2.45) * r;
+    poly(ctx, points, PALETTE.player, 4);
   circle(ctx, ship.x, ship.y, r * 0.32, '#062a33');
+  if (state.muzzleT > 0 && !state.reduceMotion) {
+    const x = ship.x + Math.cos(aim) * 23, y = ship.y + Math.sin(aim) * 23;
+    blitGlow(ctx, PALETTE.bullet, x, y, 52, state.muzzleT / 0.065);
+    circle(ctx, x, y, 4, '#ffffff');
+  }
 }
 
 function drawBullets(ctx, state) {
   ctx.lineCap = 'round';
   for (const b of state.bullets) {
     ctx.strokeStyle = b.crit ? PALETTE.gold : PALETTE.bullet;
-    ctx.lineWidth = b.crit ? 5 : 3;
+    ctx.lineWidth = b.crit ? 6 : 4.5;
     ctx.beginPath();
-    ctx.moveTo(b.x - b.vx * 0.022, b.y - b.vy * 0.022);
+    ctx.moveTo(b.x - b.vx * 0.052, b.y - b.vy * 0.052);
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
+    blitGlow(ctx, b.crit ? PALETTE.gold : PALETTE.bullet, b.x, b.y, 22, 0.7);
+    circle(ctx, b.x, b.y, 2.8, '#ffffff');
   }
   for (const b of state.ebullets) {
     blitGlow(ctx, PALETTE.enemyBullet, b.x, b.y, 26, 0.6);
@@ -246,17 +239,27 @@ function drawParticles(ctx, state) {
   for (const f of state.floaters) {
     ctx.globalAlpha = Math.max(0, f.life / f.maxLife);
     ctx.fillStyle = f.color;
+    ctx.font = f.crit ? 'bold 21px system-ui, sans-serif' : 'bold 15px system-ui, sans-serif';
     ctx.fillText(f.text, f.x, f.y);
   }
   ctx.globalAlpha = 1;
 }
 
-function drawWorld(ctx, state, input, stars) {
+function drawWorld(ctx, state, input, stars, nebula) {
+  ctx.fillStyle = PALETTE.background; ctx.fillRect(0, 0, state.width, state.height);
+  // The nebula wash is drawn unscaled: blitting the full-screen sprite
+  // through the zoom transform costs ~65 ms/frame under SwiftShader for a
+  // difference the eye cannot see (the wash is soft by design).
+  ctx.drawImage(nebula, 0, 0, state.width, state.height);
   ctx.save();
-  if (state.shake > 0) {
-    const mag = state.shake * 7;
-    ctx.translate((Math.random() - 0.5) * mag, (Math.random() - 0.5) * mag);
-  }
+  const zoom = state.reduceMotion ? 1 : state.zoom;
+  const t = state.realTime;
+  const trauma = state.reduceMotion ? 0 : state.shake * state.shake;
+  const sx = trauma * 6 * (Math.sin(t * 37) + Math.sin(t * 53));
+  const sy = trauma * 4 * (Math.sin(t * 43) + Math.sin(t * 61));
+  ctx.translate(state.width / 2 + sx, state.height / 2 + sy);
+  ctx.scale(zoom, zoom);
+  ctx.translate(-state.width / 2, -state.height / 2);
   drawBackground(ctx, state, stars, state.time);
   drawShards(ctx, state);
   for (const e of state.enemies) drawEnemy(ctx, e, state);
@@ -301,6 +304,12 @@ function drawHud(ctx, state, muted) {
   ctx.fillText(`BEST ${state.best}`, state.width - 18, 30);
   ctx.textAlign = 'left';
 
+  if (state.boss) {
+    ctx.textAlign = 'center'; ctx.font = 'bold 13px system-ui, sans-serif'; ctx.fillStyle = '#c8a8ff';
+    ctx.fillText('VOIDBORN PRIME', state.width / 2, 52);
+    bar(ctx, state.width / 2 - 150, 60, 300, 8, state.boss.hp / state.boss.maxHp, '#b388ff', '#241839');
+  }
+  ctx.textAlign = 'left';
   // Hull bar, bottom left.
   const hpFrac = ship.hp / ship.maxHp;
   const hpColor = hpFrac > 0.5 ? '#3ddc84' : hpFrac > 0.25 ? PALETTE.gold : PALETTE.danger;
@@ -358,21 +367,16 @@ function centered(ctx, state, text, y, font, color) {
 }
 
 function drawTitle(ctx, state) {
-  dim(ctx, state, 0.72);
+  dim(ctx, state, 0.56);
   const cx = state.width / 2;
   centered(ctx, state, 'NOVA SWARM', state.height * 0.26, 'bold 58px system-ui, sans-serif', PALETTE.player);
   centered(ctx, state, 'NEON ARENA SURVIVAL', state.height * 0.26 + 34, '18px system-ui, sans-serif', PALETTE.dimText);
-  const lines = [
-    'WASD / Arrows — Move',
-    'Mouse — Aim      Hold Left Click — Fire',
-    'Space / Shift — Dash (brief invulnerability)',
-    'P — Pause      M — Mute      1 / 2 / 3 — Pick an upgrade',
-  ];
-  ctx.font = '16px system-ui, sans-serif';
-  lines.forEach((line, i) => {
-    centered(ctx, state, line, state.height * 0.44 + i * 26, '16px system-ui, sans-serif', PALETTE.text);
-  });
-  const pulse = 0.65 + 0.35 * Math.sin(state.time * 4 + 1);
+  centered(ctx, state, 'WASD / Arrows — Move', state.height * 0.44, '16px system-ui, sans-serif', PALETTE.text);
+  centered(ctx, state, 'Mouse — Aim      Hold Left Click — Fire', state.height * 0.44 + 26, '16px system-ui, sans-serif', PALETTE.text);
+  centered(ctx, state, 'Space / Shift — Dash (brief invulnerability)', state.height * 0.44 + 52, '16px system-ui, sans-serif', PALETTE.text);
+  centered(ctx, state, 'P — Pause      M — Mute      1 / 2 / 3 — Pick an upgrade', state.height * 0.44 + 78, '16px system-ui, sans-serif', PALETTE.text);
+  centered(ctx, state, state.reduceMotion ? 'G — Reduce motion ON' : 'G — Reduce motion OFF', state.height * 0.83, '14px system-ui, sans-serif', PALETTE.dimText);
+  const pulse = state.reduceMotion ? 1 : 0.65 + 0.35 * Math.sin(state.realTime * 4 + 1);
   ctx.globalAlpha = pulse;
   centered(ctx, state, 'PRESS ENTER TO START', state.height * 0.68, 'bold 24px system-ui, sans-serif', PALETTE.gold);
   ctx.globalAlpha = 1;
@@ -387,18 +391,45 @@ function drawPaused(ctx, state) {
   centered(ctx, state, 'Press P to resume', state.height * 0.42 + 36, '17px system-ui, sans-serif', PALETTE.dimText);
 }
 
+const wrapped = new Map();
+function wrapText(ctx, text, x, y, width) {
+  const layout = wrapped.get(text);
+  if (!layout) return;
+  ctx.font = layout.font;
+  ctx.fillText(layout.first, x, y);
+  if (layout.second) ctx.fillText(layout.second, x, y + 21);
+}
+function prepareCards(ctx, width) {
+  for (const def of UPGRADES) {
+    let first = '', second = '', font = '';
+    for (let size = 15; size >= 10; size--) {
+      font = `${size}px system-ui, sans-serif`; ctx.font = font;
+      first = ''; second = '';
+      const words = def.desc.split(' ');
+      for (const word of words) {
+        if (!second && ctx.measureText(first ? first + ' ' + word : word).width <= width) first = first ? first + ' ' + word : word;
+        else second = second ? second + ' ' + word : word;
+      }
+      if (ctx.measureText(first).width <= width && ctx.measureText(second).width <= width) break;
+    }
+    wrapped.set(def.desc, {first, second, font});
+  }
+}
+
 function drawLevelup(ctx, state) {
   dim(ctx, state, 0.66);
   centered(ctx, state, 'LEVEL UP', state.height * 0.22, 'bold 42px system-ui, sans-serif', PALETTE.gold);
   centered(ctx, state, `Level ${state.level} — choose an upgrade (press 1, 2 or 3)`, state.height * 0.22 + 34, '17px system-ui, sans-serif', PALETTE.text);
-  const offer = state.offer ?? [];
-  const cardW = 250;
-  const cardH = 150;
+  const offer = state.offer;
+  if (!offer) return;
+  const cardW = Math.min(260, (state.width - 64) / 3 - 18);
+  const cardH = 172;
   const gap = 26;
   const total = offer.length * cardW + (offer.length - 1) * gap;
   let x = state.width / 2 - total / 2;
   const y = state.height * 0.36;
-  offer.forEach((def, i) => {
+  for (let i = 0; i < offer.length; i++) {
+    const def = offer[i];
     ctx.fillStyle = 'rgba(10, 16, 40, 0.92)';
     ctx.fillRect(x, y, cardW, cardH);
     ctx.strokeStyle = PALETTE.gold;
@@ -413,12 +444,12 @@ function drawLevelup(ctx, state) {
     ctx.fillText(def.name, x + cardW / 2, y + 66);
     ctx.fillStyle = PALETTE.dimText;
     ctx.font = '15px system-ui, sans-serif';
-    ctx.fillText(def.desc, x + cardW / 2, y + 96);
+    wrapText(ctx, def.desc, x + cardW / 2, y + 96, cardW - 28);
     const owned = state.player.taken[def.id] ?? 0;
-    ctx.fillText(`Owned: ${owned} / ${def.max}`, x + cardW / 2, y + 122);
+    ctx.fillText(`Owned: ${owned} / ${def.max}`, x + cardW / 2, y + 150);
     ctx.textAlign = 'left';
     x += cardW + gap;
-  });
+  }
 }
 
 function drawOver(ctx, state) {
@@ -428,7 +459,7 @@ function drawOver(ctx, state) {
   centered(ctx, state, `Reached wave ${state.wave}  ·  ${state.kills} kills  ·  ${state.upgrades} upgrades`, state.height * 0.3 + 82, '17px system-ui, sans-serif', PALETTE.dimText);
   const isBest = state.score > 0 && state.score >= state.best;
   centered(ctx, state, isBest ? `NEW BEST!` : `BEST ${state.best}`, state.height * 0.3 + 114, '17px system-ui, sans-serif', PALETTE.gold);
-  const pulse = 0.65 + 0.35 * Math.sin(state.time * 4 + 2);
+  const pulse = state.reduceMotion ? 1 : 0.65 + 0.35 * Math.sin(state.realTime * 4 + 2);
   ctx.globalAlpha = pulse;
   centered(ctx, state, 'PRESS R TO RESTART', state.height * 0.62, 'bold 24px system-ui, sans-serif', PALETTE.gold);
   ctx.globalAlpha = 1;
@@ -439,12 +470,39 @@ function drawOver(ctx, state) {
 export function createRenderer(canvas) {
   const ctx = canvas.getContext('2d');
   let stars = makeStars(canvas.width, canvas.height);
+  const nebula = document.createElement('canvas');
+  const edgeFlash = document.createElement('canvas');
+  // Warm every glow before any draw/update hot path.
+  for (const color of ['#ffffff', '#ffb347', '#ff4d6d', '#ff9f1c', '#8dff5e', '#ffe14d', '#b388ff', ...Object.values(PALETTE)]) {
+    if (/^#[0-9a-f]{6}$/i.test(color)) glowSprite(color);
+  }
   return {
     resize(width, height) {
       stars = makeStars(width, height);
+      prepareCards(ctx, Math.min(260, (width - 64) / 3 - 18) - 28);
+      nebula.width = Math.max(2, width >> 1); nebula.height = Math.max(2, height >> 1);
+      edgeFlash.width = width; edgeFlash.height = height;
+      const v = edgeFlash.getContext('2d');
+      v.save(); v.scale(width, height);
+      const edge = v.createRadialGradient(0.5, 0.5, 0.28, 0.5, 0.5, 0.7);
+      edge.addColorStop(0, '#ff4d6d00'); edge.addColorStop(1, '#ff4d6dbb');
+      v.fillStyle = edge; v.fillRect(0, 0, 1, 1); v.restore();
+      const g = nebula.getContext('2d');
+      const nw = nebula.width, nh = nebula.height;
+      for (let i = 0; i < 3; i++) {
+        const x = nw * (0.15 + i * 0.35), y = nh * (i === 1 ? 0.28 : 0.76);
+        const radius = nw * 0.32;
+        const grad = g.createRadialGradient(x, y, 0, x, y, radius);
+        grad.addColorStop(0, i === 1 ? '#54278349' : '#154b734d'); grad.addColorStop(1, '#05060f00');
+        g.fillStyle = grad; g.fillRect(0, 0, nw, nh);
+      }
     },
     draw(state, input, muted) {
-      drawWorld(ctx, state, input, stars);
+      drawWorld(ctx, state, input, stars, nebula);
+      if (state.hurtFlash > 0 && !state.reduceMotion) {
+        ctx.globalAlpha = state.hurtFlash;
+        ctx.drawImage(edgeFlash, 0, 0); ctx.globalAlpha = 1;
+      }
       if (state.screen !== 'title') drawHud(ctx, state, muted);
       if (state.screen === 'title') drawTitle(ctx, state);
       else if (state.screen === 'paused') drawPaused(ctx, state);
